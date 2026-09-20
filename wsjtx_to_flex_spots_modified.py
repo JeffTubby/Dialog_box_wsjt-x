@@ -259,6 +259,16 @@ def parse_wsjtx_message(data):
 
     return None
 
+
+def get_multicast_interface(remote_ip):
+    """Return the local interface address used to reach the Flex radio."""
+    probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        probe.connect((remote_ip, FLEX_PORT))
+        return probe.getsockname()[0]
+    finally:
+        probe.close()
+
 # ────────────────────────────────────────────────
 # Interactive prompts at startup
 # ────────────────────────────────────────────────
@@ -301,11 +311,26 @@ if __name__ == "__main__":
     print(f"  Lifetime / refresh window: {SPOT_LIFETIME} seconds")
     print(f"  CQ POTA spots: green\n")
 
+    try:
+        multicast_iface = get_multicast_interface(FLEX_IP)
+    except OSError as error:
+        raise RuntimeError(
+            f"Cannot determine a local network interface for Flex radio {FLEX_IP}: {error}"
+        ) from error
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind(('', MCAST_PORT))
-    mreq = struct.pack("4sl", socket.inet_aton(MCAST_GRP), socket.INADDR_ANY)
-    sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    mreq = struct.pack(
+        "4s4s", socket.inet_aton(MCAST_GRP), socket.inet_aton(multicast_iface)
+    )
+    try:
+        sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+    except OSError as error:
+        sock.close()
+        raise RuntimeError(
+            f"Cannot join WSJT-X multicast group {MCAST_GRP} on {multicast_iface}: {error}"
+        ) from error
 
     while True:
         try:
